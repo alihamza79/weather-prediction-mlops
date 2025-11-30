@@ -10,21 +10,18 @@ This service provides:
 
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
 
-import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from pydantic import BaseModel, Field
 from starlette.responses import Response
 
-from src.config import settings, MODELS_DIR
+from src.config import settings
 from src.models.predict import WeatherPredictor
-
 
 # ============================================================================
 # Prometheus Metrics
@@ -79,9 +76,10 @@ LAST_PREDICTION_TIMESTAMP = Gauge(
 # Request/Response Models
 # ============================================================================
 
+
 class WeatherFeatures(BaseModel):
     """Input features for weather prediction."""
-    
+
     # Time features
     hour_sin: float = Field(..., description="Sine of hour (cyclical encoding)")
     hour_cos: float = Field(..., description="Cosine of hour (cyclical encoding)")
@@ -90,7 +88,7 @@ class WeatherFeatures(BaseModel):
     month_sin: float = Field(0.0, description="Sine of month")
     month_cos: float = Field(1.0, description="Cosine of month")
     is_weekend: int = Field(0, ge=0, le=1, description="Weekend indicator")
-    
+
     # Current weather
     temperature: float = Field(..., ge=-60, le=60, description="Current temperature (°C)")
     humidity: float = Field(..., ge=0, le=100, description="Humidity (%)")
@@ -98,18 +96,18 @@ class WeatherFeatures(BaseModel):
     wind_speed: float = Field(..., ge=0, le=200, description="Wind speed (m/s)")
     clouds: float = Field(50.0, ge=0, le=100, description="Cloud coverage (%)")
     visibility: float = Field(10000.0, ge=0, description="Visibility (m)")
-    
+
     # Lag features (optional)
-    temperature_lag_1h: Optional[float] = Field(None, description="Temperature 1 hour ago")
-    temperature_lag_3h: Optional[float] = Field(None, description="Temperature 3 hours ago")
-    temperature_lag_6h: Optional[float] = Field(None, description="Temperature 6 hours ago")
-    
+    temperature_lag_1h: float | None = Field(None, description="Temperature 1 hour ago")
+    temperature_lag_3h: float | None = Field(None, description="Temperature 3 hours ago")
+    temperature_lag_6h: float | None = Field(None, description="Temperature 6 hours ago")
+
     # Rolling features (optional)
-    temperature_rolling_mean_6h: Optional[float] = Field(None, description="6-hour rolling mean temp")
-    temperature_rolling_std_6h: Optional[float] = Field(None, description="6-hour rolling std temp")
-    
-    class Config:
-        json_schema_extra = {
+    temperature_rolling_mean_6h: float | None = Field(None, description="6-hour rolling mean temp")
+    temperature_rolling_std_6h: float | None = Field(None, description="6-hour rolling std temp")
+
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "hour_sin": 0.5,
                 "hour_cos": 0.866,
@@ -129,12 +127,15 @@ class WeatherFeatures(BaseModel):
                 "temperature_rolling_mean_6h": 19.0,
             }
         }
+    }
 
 
 class PredictionResponse(BaseModel):
     """Prediction response model."""
-    
-    predicted_temperature: float = Field(..., description="Predicted temperature 6 hours ahead (°C)")
+
+    predicted_temperature: float = Field(
+        ..., description="Predicted temperature 6 hours ahead (°C)"
+    )
     forecast_horizon_hours: int = Field(6, description="Forecast horizon in hours")
     model_name: str = Field(..., description="Name of the model used")
     timestamp: str = Field(..., description="Prediction timestamp")
@@ -143,7 +144,7 @@ class PredictionResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Health check response."""
-    
+
     status: str
     model_loaded: bool
     timestamp: str
@@ -152,13 +153,13 @@ class HealthResponse(BaseModel):
 
 class BatchPredictionRequest(BaseModel):
     """Batch prediction request."""
-    
+
     features: list[WeatherFeatures]
 
 
 class BatchPredictionResponse(BaseModel):
     """Batch prediction response."""
-    
+
     predictions: list[float]
     count: int
     timestamp: str
@@ -168,7 +169,7 @@ class BatchPredictionResponse(BaseModel):
 # Global State
 # ============================================================================
 
-predictor: Optional[WeatherPredictor] = None
+predictor: WeatherPredictor | None = None
 request_count_with_drift = 0
 total_request_count = 0
 
@@ -191,29 +192,29 @@ FEATURE_RANGES = {
 def check_drift(features: WeatherFeatures) -> bool:
     """
     Check if features are out of expected ranges (basic drift detection).
-    
+
     Returns True if drift is detected.
     """
     drift_detected = False
-    
+
     for feature_name, (min_val, max_val) in FEATURE_RANGES.items():
         value = getattr(features, feature_name, None)
         if value is not None:
             if value < min_val or value > max_val:
                 FEATURE_OUT_OF_RANGE.labels(feature=feature_name).inc()
                 drift_detected = True
-    
+
     return drift_detected
 
 
 def update_drift_ratio(has_drift: bool):
     """Update the drift ratio metric."""
     global request_count_with_drift, total_request_count
-    
+
     total_request_count += 1
     if has_drift:
         request_count_with_drift += 1
-    
+
     if total_request_count > 0:
         ratio = request_count_with_drift / total_request_count
         DRIFT_RATIO.set(ratio)
@@ -223,14 +224,15 @@ def update_drift_ratio(has_drift: bool):
 # Application Lifecycle
 # ============================================================================
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle manager."""
     global predictor
-    
+
     # Startup
     logger.info("Starting Weather Prediction API...")
-    
+
     try:
         predictor = WeatherPredictor()
         if predictor.is_loaded():
@@ -242,9 +244,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         MODEL_LOADED.set(0)
         logger.error(f"Failed to load model: {e}")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down Weather Prediction API...")
 
@@ -274,28 +276,30 @@ app.add_middleware(
 # Middleware
 # ============================================================================
 
+
 @app.middleware("http")
 async def add_metrics(request: Request, call_next):
     """Add request metrics middleware."""
     start_time = time.time()
-    
+
     response = await call_next(request)
-    
+
     # Record latency
     latency = time.time() - start_time
     endpoint = request.url.path
     REQUEST_LATENCY.labels(endpoint=endpoint).observe(latency)
-    
+
     # Record request count
     status = "success" if response.status_code < 400 else "error"
     REQUEST_COUNT.labels(endpoint=endpoint, status=status).inc()
-    
+
     return response
 
 
 # ============================================================================
 # Endpoints
 # ============================================================================
+
 
 @app.get("/", response_model=dict)
 async def root():
@@ -315,7 +319,7 @@ async def health_check():
     return HealthResponse(
         status="healthy" if predictor and predictor.is_loaded() else "degraded",
         model_loaded=predictor.is_loaded() if predictor else False,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         version="1.0.0",
     )
 
@@ -333,7 +337,7 @@ async def metrics():
 async def predict(features: WeatherFeatures):
     """
     Make a single weather prediction.
-    
+
     Predicts temperature 6 hours ahead based on current weather features.
     """
     if not predictor or not predictor.is_loaded():
@@ -341,37 +345,37 @@ async def predict(features: WeatherFeatures):
             status_code=503,
             detail="Model not loaded. Please train the model first.",
         )
-    
+
     # Check for data drift
     drift_detected = check_drift(features)
     update_drift_ratio(drift_detected)
-    
+
     try:
         # Make prediction
         prediction = predictor.predict_single(**features.model_dump())
-        
+
         # Record prediction value
         PREDICTION_VALUE.observe(prediction)
         LAST_PREDICTION_TIMESTAMP.set(time.time())
-        
+
         return PredictionResponse(
             predicted_temperature=round(prediction, 2),
             forecast_horizon_hours=settings.model.forecast_horizon_hours,
             model_name=settings.model.model_name,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             drift_warning=drift_detected,
         )
-        
+
     except Exception as e:
         logger.error(f"Prediction error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from None
 
 
 @app.post("/predict/batch", response_model=BatchPredictionResponse)
 async def predict_batch(request: BatchPredictionRequest):
     """
     Make batch predictions.
-    
+
     Accepts multiple feature sets and returns predictions for all.
     """
     if not predictor or not predictor.is_loaded():
@@ -379,25 +383,25 @@ async def predict_batch(request: BatchPredictionRequest):
             status_code=503,
             detail="Model not loaded. Please train the model first.",
         )
-    
+
     try:
         features_list = [f.model_dump() for f in request.features]
         predictions = predictor.predict(features_list)
-        
+
         # Record metrics
         for pred in predictions:
             PREDICTION_VALUE.observe(pred)
         LAST_PREDICTION_TIMESTAMP.set(time.time())
-        
+
         return BatchPredictionResponse(
             predictions=[round(p, 2) for p in predictions.tolist()],
             count=len(predictions),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
-        
+
     except Exception as e:
         logger.error(f"Batch prediction error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from None
 
 
 @app.get("/model/info")
@@ -408,7 +412,7 @@ async def model_info():
             status_code=503,
             detail="Model not loaded",
         )
-    
+
     return {
         "model_name": settings.model.model_name,
         "feature_count": len(predictor.feature_columns),
@@ -426,10 +430,10 @@ async def feature_importance():
             status_code=503,
             detail="Model not loaded",
         )
-    
+
     importance = predictor.get_feature_importance()
     sorted_importance = dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
-    
+
     return {
         "feature_importance": sorted_importance,
         "top_10_features": dict(list(sorted_importance.items())[:10]),
@@ -439,6 +443,7 @@ async def feature_importance():
 # ============================================================================
 # Error Handlers
 # ============================================================================
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -456,11 +461,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         "src.api.app:app",
         host=settings.api.host,
         port=settings.api.port,
         reload=True,
     )
-

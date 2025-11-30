@@ -3,13 +3,13 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 import pandas as pd
 from loguru import logger
 
-from src.config import settings, RAW_DATA_DIR
+from src.config import RAW_DATA_DIR, settings
 
 
 class WeatherDataExtractor:
@@ -20,7 +20,7 @@ class WeatherDataExtractor:
         self.api_key = self.config.api_key
         self.city = self.config.city_name
         self.country = self.config.country_code
-        
+
         if not self.api_key:
             raise ValueError("OpenWeatherMap API key not configured. Set OPENWEATHERMAP_API_KEY.")
 
@@ -32,15 +32,15 @@ class WeatherDataExtractor:
             "limit": 1,
             "appid": self.api_key,
         }
-        
+
         with httpx.Client(timeout=30.0) as client:
             response = client.get(geocoding_url, params=params)
             response.raise_for_status()
             data = response.json()
-            
+
         if not data:
             raise ValueError(f"Could not find coordinates for {self.city}, {self.country}")
-        
+
         return data[0]["lat"], data[0]["lon"]
 
     def fetch_current_weather(self) -> dict[str, Any]:
@@ -51,14 +51,14 @@ class WeatherDataExtractor:
             "appid": self.api_key,
             "units": "metric",  # Celsius
         }
-        
+
         logger.info(f"Fetching current weather for {self.city}, {self.country}")
-        
+
         with httpx.Client(timeout=30.0) as client:
             response = client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-        
+
         return self._parse_current_weather(data)
 
     def fetch_forecast(self) -> list[dict[str, Any]]:
@@ -69,14 +69,14 @@ class WeatherDataExtractor:
             "appid": self.api_key,
             "units": "metric",
         }
-        
+
         logger.info(f"Fetching 5-day forecast for {self.city}, {self.country}")
-        
+
         with httpx.Client(timeout=30.0) as client:
             response = client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-        
+
         return [self._parse_forecast_item(item) for item in data.get("list", [])]
 
     def _parse_current_weather(self, data: dict) -> dict[str, Any]:
@@ -140,99 +140,99 @@ class WeatherDataExtractor:
     def extract_and_save(
         self,
         include_forecast: bool = True,
-        output_dir: Optional[Path] = None,
-    ) -> tuple[Path, Optional[Path]]:
+        output_dir: Path | None = None,
+    ) -> tuple[Path, Path | None]:
         """
         Extract weather data and save to raw data directory.
-        
+
         Returns:
             Tuple of (current_weather_path, forecast_path)
         """
         output_dir = output_dir or RAW_DATA_DIR
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        
+
         # Fetch and save current weather
         current_weather = self.fetch_current_weather()
         current_path = output_dir / f"current_weather_{timestamp}.json"
-        
+
         with open(current_path, "w") as f:
             json.dump(current_weather, f, indent=2)
-        
+
         logger.info(f"Saved current weather to {current_path}")
-        
+
         forecast_path = None
         if include_forecast:
             # Fetch and save forecast
             forecast_data = self.fetch_forecast()
             forecast_path = output_dir / f"forecast_{timestamp}.json"
-            
+
             with open(forecast_path, "w") as f:
                 json.dump(forecast_data, f, indent=2)
-            
+
             logger.info(f"Saved forecast to {forecast_path}")
-        
+
         return current_path, forecast_path
 
-    def load_historical_data(self, data_dir: Optional[Path] = None) -> pd.DataFrame:
+    def load_historical_data(self, data_dir: Path | None = None) -> pd.DataFrame:
         """
         Load all historical weather data from raw data directory.
-        
+
         This combines all previously collected data points.
         """
         data_dir = data_dir or RAW_DATA_DIR
-        
+
         # Load current weather files
         current_files = list(data_dir.glob("current_weather_*.json"))
         current_data = []
-        
+
         for file_path in current_files:
             with open(file_path) as f:
                 data = json.load(f)
                 current_data.append(data)
-        
+
         if not current_data:
             logger.warning("No historical weather data found")
             return pd.DataFrame()
-        
+
         df = pd.DataFrame(current_data)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df = df.sort_values("timestamp").reset_index(drop=True)
-        
+
         logger.info(f"Loaded {len(df)} historical weather records")
         return df
 
-    def load_forecast_data(self, data_dir: Optional[Path] = None) -> pd.DataFrame:
+    def load_forecast_data(self, data_dir: Path | None = None) -> pd.DataFrame:
         """Load all forecast data from raw data directory."""
         data_dir = data_dir or RAW_DATA_DIR
-        
+
         forecast_files = list(data_dir.glob("forecast_*.json"))
         all_forecasts = []
-        
+
         for file_path in forecast_files:
             with open(file_path) as f:
                 data = json.load(f)
                 all_forecasts.extend(data)
-        
+
         if not all_forecasts:
             logger.warning("No forecast data found")
             return pd.DataFrame()
-        
+
         df = pd.DataFrame(all_forecasts)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df["forecast_datetime"] = pd.to_datetime(df["forecast_datetime"])
         df = df.sort_values(["timestamp", "forecast_datetime"]).reset_index(drop=True)
-        
+
         logger.info(f"Loaded {len(df)} forecast records")
         return df
 
 
 def extract_weather_data(
     include_forecast: bool = True,
-    output_dir: Optional[Path] = None,
-) -> tuple[Path, Optional[Path]]:
+    output_dir: Path | None = None,
+) -> tuple[Path, Path | None]:
     """
     Convenience function to extract weather data.
-    
+
     This is the main entry point for the Airflow DAG.
     """
     extractor = WeatherDataExtractor()
@@ -244,4 +244,3 @@ if __name__ == "__main__":
     current_path, forecast_path = extract_weather_data()
     print(f"Current weather saved to: {current_path}")
     print(f"Forecast saved to: {forecast_path}")
-

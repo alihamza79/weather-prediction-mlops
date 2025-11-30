@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 from loguru import logger
@@ -29,7 +29,7 @@ class DataQualityReport:
     total_columns: int
     checks: list[QualityCheckResult]
     passed: bool
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert report to dictionary."""
         return {
@@ -68,16 +68,16 @@ class DataQualityChecker:
         "pressure",
     ]
 
-    def __init__(self, config: Optional[Any] = None):
+    def __init__(self, config: Any | None = None):
         self.config = config or settings.data_quality
 
     def check_null_ratio(self, df: pd.DataFrame) -> QualityCheckResult:
         """Check if null ratio is within acceptable limits."""
         null_ratios = df[self.CRITICAL_NUMERIC_COLUMNS].isnull().mean()
         max_null_ratio = null_ratios.max()
-        
+
         passed = max_null_ratio <= self.config.max_null_ratio
-        
+
         return QualityCheckResult(
             check_name="null_ratio_check",
             passed=passed,
@@ -93,7 +93,7 @@ class DataQualityChecker:
         """Check if dataset has minimum required rows."""
         row_count = len(df)
         passed = row_count >= self.config.min_rows
-        
+
         return QualityCheckResult(
             check_name="minimum_rows_check",
             passed=passed,
@@ -108,11 +108,13 @@ class DataQualityChecker:
         """Check if required columns are present."""
         missing_columns = [col for col in self.REQUIRED_COLUMNS if col not in df.columns]
         passed = len(missing_columns) == 0
-        
+
         return QualityCheckResult(
             check_name="schema_validation",
             passed=passed,
-            message=f"Missing columns: {missing_columns}" if missing_columns else "All required columns present",
+            message=f"Missing columns: {missing_columns}"
+            if missing_columns
+            else "All required columns present",
             details={
                 "required_columns": self.REQUIRED_COLUMNS,
                 "present_columns": list(df.columns),
@@ -129,16 +131,13 @@ class DataQualityChecker:
                 message="Temperature column not found",
                 details={},
             )
-        
+
         temp = df["temperature"].dropna()
         min_temp = temp.min()
         max_temp = temp.max()
-        
-        passed = (
-            min_temp >= self.config.min_temperature
-            and max_temp <= self.config.max_temperature
-        )
-        
+
+        passed = min_temp >= self.config.min_temperature and max_temp <= self.config.max_temperature
+
         return QualityCheckResult(
             check_name="temperature_range_check",
             passed=passed,
@@ -160,16 +159,15 @@ class DataQualityChecker:
                 message="Humidity column not found",
                 details={},
             )
-        
+
         humidity = df["humidity"].dropna()
         min_humidity = humidity.min()
         max_humidity = humidity.max()
-        
+
         passed = (
-            min_humidity >= self.config.min_humidity
-            and max_humidity <= self.config.max_humidity
+            min_humidity >= self.config.min_humidity and max_humidity <= self.config.max_humidity
         )
-        
+
         return QualityCheckResult(
             check_name="humidity_range_check",
             passed=passed,
@@ -191,13 +189,13 @@ class DataQualityChecker:
                 message="No timestamp column to check duplicates",
                 details={},
             )
-        
+
         duplicate_count = df["timestamp"].duplicated().sum()
         duplicate_ratio = duplicate_count / len(df) if len(df) > 0 else 0
-        
+
         # Allow some duplicates (up to 5%)
         passed = duplicate_ratio <= 0.05
-        
+
         return QualityCheckResult(
             check_name="duplicate_check",
             passed=passed,
@@ -217,17 +215,17 @@ class DataQualityChecker:
                 message="Not enough data to check continuity",
                 details={},
             )
-        
+
         df_sorted = df.sort_values("timestamp")
         time_diffs = df_sorted["timestamp"].diff().dropna()
-        
+
         # Convert to hours
         max_gap_hours = time_diffs.max().total_seconds() / 3600 if len(time_diffs) > 0 else 0
         median_gap_hours = time_diffs.median().total_seconds() / 3600 if len(time_diffs) > 0 else 0
-        
+
         # Flag if max gap is more than 24 hours
         passed = max_gap_hours <= 24
-        
+
         return QualityCheckResult(
             check_name="timestamp_continuity_check",
             passed=passed,
@@ -245,16 +243,16 @@ class DataQualityChecker:
     ) -> DataQualityReport:
         """
         Run all quality checks on the dataframe.
-        
+
         Args:
             df: DataFrame to validate
             fail_on_error: If True, raise exception on failed checks
-            
+
         Returns:
             DataQualityReport with all check results
         """
         logger.info(f"Running data quality checks on {len(df)} rows")
-        
+
         checks = [
             self.check_schema(df),
             self.check_null_ratio(df),
@@ -264,15 +262,15 @@ class DataQualityChecker:
             self.check_duplicates(df),
             self.check_timestamp_continuity(df),
         ]
-        
+
         # Log each check result
         for check in checks:
             status = "✓" if check.passed else "✗"
             log_func = logger.info if check.passed else logger.warning
             log_func(f"  {status} {check.check_name}: {check.message}")
-        
+
         all_passed = all(check.passed for check in checks)
-        
+
         report = DataQualityReport(
             timestamp=datetime.utcnow().isoformat(),
             total_rows=len(df),
@@ -280,14 +278,14 @@ class DataQualityChecker:
             checks=checks,
             passed=all_passed,
         )
-        
+
         if not all_passed and fail_on_error:
             failed_checks = [c.check_name for c in checks if not c.passed]
             raise DataQualityError(
                 f"Data quality checks failed: {failed_checks}",
                 report=report,
             )
-        
+
         logger.info(f"Data quality check {'PASSED' if all_passed else 'FAILED'}")
         return report
 
@@ -306,7 +304,7 @@ def validate_weather_data(
 ) -> DataQualityReport:
     """
     Convenience function to validate weather data.
-    
+
     This is the main entry point for the Airflow DAG.
     """
     checker = DataQualityChecker()
@@ -316,15 +314,16 @@ def validate_weather_data(
 if __name__ == "__main__":
     # Test with sample data
     import numpy as np
-    
-    sample_data = pd.DataFrame({
-        "timestamp": pd.date_range("2024-01-01", periods=100, freq="h"),
-        "temperature": np.random.uniform(10, 30, 100),
-        "humidity": np.random.uniform(40, 80, 100),
-        "pressure": np.random.uniform(1000, 1020, 100),
-        "wind_speed": np.random.uniform(0, 20, 100),
-    })
-    
+
+    sample_data = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=100, freq="h"),
+            "temperature": np.random.uniform(10, 30, 100),
+            "humidity": np.random.uniform(40, 80, 100),
+            "pressure": np.random.uniform(1000, 1020, 100),
+            "wind_speed": np.random.uniform(0, 20, 100),
+        }
+    )
+
     report = validate_weather_data(sample_data, fail_on_error=False)
     print(f"\nQuality Report: {'PASSED' if report.passed else 'FAILED'}")
-

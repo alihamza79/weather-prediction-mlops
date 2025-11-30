@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-from typing import Any, Optional, Union
 
 import joblib
 import mlflow
@@ -10,16 +9,16 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from src.config import settings, MODELS_DIR
+from src.config import MODELS_DIR, settings
 
 
 class WeatherPredictor:
     """Make predictions with trained weather model."""
 
-    def __init__(self, model_path: Optional[Path] = None, use_mlflow: bool = False):
+    def __init__(self, model_path: Path | None = None, use_mlflow: bool = False):
         """
         Initialize predictor.
-        
+
         Args:
             model_path: Path to local model file
             use_mlflow: Whether to load model from MLflow registry
@@ -27,7 +26,7 @@ class WeatherPredictor:
         self.model = None
         self.feature_columns: list[str] = []
         self.target_column = settings.model.target_column
-        
+
         if use_mlflow:
             self._load_from_mlflow()
         elif model_path:
@@ -49,18 +48,18 @@ class WeatherPredictor:
     def _load_from_mlflow(self):
         """Load model from MLflow registry."""
         dagshub_config = settings.dagshub
-        
+
         if dagshub_config.username and dagshub_config.token:
             os.environ["MLFLOW_TRACKING_USERNAME"] = dagshub_config.username
             os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_config.token
             mlflow.set_tracking_uri(dagshub_config.mlflow_tracking_uri)
-        
+
         model_name = settings.model.model_name
         model_uri = f"models:/{model_name}/latest"
-        
+
         try:
             self.model = mlflow.xgboost.load_model(model_uri)
-            
+
             # Try to load feature columns
             client = mlflow.tracking.MlflowClient()
             latest_versions = client.get_latest_versions(model_name)
@@ -68,59 +67,60 @@ class WeatherPredictor:
                 run_id = latest_versions[0].run_id
                 artifact_path = client.download_artifacts(run_id, "feature_columns.json")
                 import json
+
                 with open(artifact_path) as f:
                     data = json.load(f)
                     self.feature_columns = data.get("feature_columns", [])
-            
+
             logger.info(f"Loaded model '{model_name}' from MLflow registry")
         except Exception as e:
             logger.error(f"Failed to load model from MLflow: {e}")
             raise
 
-    def predict(self, features: Union[pd.DataFrame, dict, list[dict]]) -> np.ndarray:
+    def predict(self, features: pd.DataFrame | dict | list[dict]) -> np.ndarray:
         """
         Make predictions.
-        
+
         Args:
             features: Input features as DataFrame, dict, or list of dicts
-            
+
         Returns:
             Array of predictions
         """
         if self.model is None:
             raise ValueError("Model not loaded. Call load_model first.")
-        
+
         # Convert to DataFrame if needed
         if isinstance(features, dict):
             features = pd.DataFrame([features])
         elif isinstance(features, list):
             features = pd.DataFrame(features)
-        
+
         # Ensure correct columns
         if self.feature_columns:
             # Add missing columns with default values
             for col in self.feature_columns:
                 if col not in features.columns:
                     features[col] = 0
-            
+
             # Select only required columns in correct order
             features = features[self.feature_columns]
-        
+
         # Handle NaN values
         features = features.fillna(features.median())
-        
+
         # Make prediction
         predictions = self.model.predict(features)
-        
+
         return predictions
 
     def predict_single(self, **kwargs) -> float:
         """
         Make a single prediction.
-        
+
         Args:
             **kwargs: Feature values as keyword arguments
-            
+
         Returns:
             Single prediction value
         """
@@ -131,9 +131,9 @@ class WeatherPredictor:
         """Get feature importance from model."""
         if self.model is None:
             raise ValueError("Model not loaded")
-        
+
         importance = self.model.feature_importances_
-        return dict(zip(self.feature_columns, importance))
+        return dict(zip(self.feature_columns, importance, strict=False))
 
     def is_loaded(self) -> bool:
         """Check if model is loaded."""
@@ -141,16 +141,16 @@ class WeatherPredictor:
 
 
 def load_predictor(
-    model_path: Optional[Path] = None,
+    model_path: Path | None = None,
     use_mlflow: bool = False,
 ) -> WeatherPredictor:
     """
     Factory function to create predictor.
-    
+
     Args:
         model_path: Path to local model file
         use_mlflow: Whether to load from MLflow registry
-        
+
     Returns:
         Initialized WeatherPredictor
     """
@@ -160,7 +160,7 @@ def load_predictor(
 if __name__ == "__main__":
     # Test prediction
     predictor = WeatherPredictor()
-    
+
     if predictor.is_loaded():
         # Sample prediction
         sample_features = {
@@ -181,9 +181,8 @@ if __name__ == "__main__":
             "temperature_lag_3h": 18.0,
             "temperature_rolling_mean_6h": 19.0,
         }
-        
+
         prediction = predictor.predict_single(**sample_features)
         print(f"Predicted temperature (6h ahead): {prediction:.2f}°C")
     else:
         print("No model loaded. Train a model first.")
-

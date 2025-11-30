@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -43,11 +42,11 @@ class DagshubConfig(BaseModel):
         default_factory=lambda: os.getenv("DAGSHUB_REPO_NAME", "weather-prediction-mlops")
     )
     token: str = Field(default_factory=lambda: os.getenv("DAGSHUB_TOKEN", ""))
-    
+
     @property
     def mlflow_tracking_uri(self) -> str:
         return f"https://dagshub.com/{self.username}/{self.repo_name}.mlflow"
-    
+
     @property
     def dvc_remote_url(self) -> str:
         return f"https://dagshub.com/{self.username}/{self.repo_name}.dvc"
@@ -71,7 +70,7 @@ class ModelConfig(BaseModel):
     forecast_horizon_hours: int = 6  # Predict 6 hours ahead
     train_test_split: float = 0.2
     random_state: int = 42
-    
+
     # Feature engineering
     lag_features: list[int] = [1, 2, 3, 6, 12, 24]  # Hours of lag
     rolling_windows: list[int] = [3, 6, 12, 24]  # Rolling window sizes
@@ -99,9 +98,7 @@ class DataQualityConfig(BaseModel):
 class MonitoringConfig(BaseModel):
     """Prometheus and Grafana configuration."""
 
-    prometheus_port: int = Field(
-        default_factory=lambda: int(os.getenv("PROMETHEUS_PORT", "9090"))
-    )
+    prometheus_port: int = Field(default_factory=lambda: int(os.getenv("PROMETHEUS_PORT", "9090")))
     grafana_port: int = Field(default_factory=lambda: int(os.getenv("GRAFANA_PORT", "3000")))
     latency_threshold_ms: float = 500.0  # Alert if latency exceeds this
     drift_threshold: float = 0.1  # Alert if drift ratio exceeds 10%
@@ -126,4 +123,3 @@ settings = Settings()
 def get_settings() -> Settings:
     """Get the global settings instance."""
     return settings
-

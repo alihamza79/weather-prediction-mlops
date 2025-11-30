@@ -4,7 +4,7 @@
 # ============================================================================
 # Stage 1: Builder
 # ============================================================================
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
@@ -18,20 +18,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
-# Copy dependency files
-COPY pyproject.toml ./
+# Copy dependency files AND README (required by pyproject.toml)
+COPY pyproject.toml README.md ./
 
 # Create virtual environment and install dependencies
 RUN uv venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN uv pip install --no-cache -e ".[dev]"
+RUN uv pip install --no-cache .
 
 # ============================================================================
 # Stage 2: Production
 # ============================================================================
-FROM python:3.11-slim as production
+FROM python:3.11-slim AS production
 
 WORKDIR /app
+
+# Install curl for healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
@@ -43,7 +47,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY src/ ./src/
 COPY models/ ./models/
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 
 # Create necessary directories
 RUN mkdir -p /app/data/raw /app/data/processed /app/reports /app/logs \
@@ -67,4 +71,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Run the application
 CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
-

@@ -15,7 +15,7 @@ def setup_logging(
 ) -> None:
     """
     Configure loguru logging.
-    
+
     Args:
         level: Log level (DEBUG, INFO, WARNING, ERROR)
         log_file: Whether to write logs to file
@@ -23,7 +23,7 @@ def setup_logging(
     """
     # Remove default handler
     logger.remove()
-    
+
     # Add console handler with color
     logger.add(
         sys.stderr,
@@ -31,7 +31,7 @@ def setup_logging(
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
         colorize=True,
     )
-    
+
     if log_file:
         # Add file handler
         log_path = log_dir / "app_{time:YYYY-MM-DD}.log"
@@ -48,4 +48,3 @@ def setup_logging(
 def get_logger(name: str = None):
     """Get a logger instance."""
     return logger.bind(name=name) if name else logger
-
