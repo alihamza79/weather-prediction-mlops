@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -13,7 +14,7 @@ from src.config import PROCESSED_DATA_DIR, REPORTS_DIR, settings
 class WeatherDataTransformer:
     """Transform raw weather data and engineer features for ML."""
 
-    def __init__(self, config: any | None = None):
+    def __init__(self, config: Any | None = None):
         self.config = config or settings.model
         self.feature_columns: list[str] = []
 
