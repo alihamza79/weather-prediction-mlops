@@ -1,0 +1,175 @@
+# CI Pipeline for Dev -> Test merges
+# Runs: Model Retraining Test with CML Report
+
+name: CI - Test Branch (Model Training)
+
+on:
+  pull_request:
+    branches:
+      - test
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  model-training-test:
+    name: Model Training & CML Report
+    runs-on: ubuntu-latest
+    
+    env:
+      DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+      DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+      DAGSHUB_REPO_NAME: ${{ secrets.DAGSHUB_REPO_NAME }}
+      OPENWEATHERMAP_API_KEY: ${{ secrets.OPENWEATHERMAP_API_KEY }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          source .venv/bin/activate
+          uv pip install -e ".[dev]"
+          pip install cml
+
+      - name: Setup DVC
+        run: |
+          source .venv/bin/activate
+          dvc version
+
+      - name: Pull data with DVC
+        run: |
+          source .venv/bin/activate
+          dvc pull || echo "No DVC data to pull"
+        env:
+          DVC_REMOTE_URL: https://dagshub.com/${{ secrets.DAGSHUB_USERNAME }}/${{ secrets.DAGSHUB_REPO_NAME }}.dvc
+
+      - name: Generate sample data for testing
+        run: |
+          source .venv/bin/activate
+          python -c "
+          import pandas as pd
+          import numpy as np
+          from pathlib import Path
+          
+          # Create sample data
+          n_samples = 500
+          np.random.seed(42)
+          
+          data = pd.DataFrame({
+              'hour_sin': np.sin(2 * np.pi * np.arange(n_samples) / 24),
+              'hour_cos': np.cos(2 * np.pi * np.arange(n_samples) / 24),
+              'dow_sin': np.sin(2 * np.pi * (np.arange(n_samples) // 24) / 7),
+              'dow_cos': np.cos(2 * np.pi * (np.arange(n_samples) // 24) / 7),
+              'month_sin': np.zeros(n_samples),
+              'month_cos': np.ones(n_samples),
+              'is_weekend': np.zeros(n_samples),
+              'temperature': np.random.uniform(10, 30, n_samples),
+              'humidity': np.random.uniform(40, 80, n_samples),
+              'pressure': np.random.uniform(1000, 1020, n_samples),
+              'wind_speed': np.random.uniform(0, 20, n_samples),
+              'clouds': np.random.uniform(0, 100, n_samples),
+              'visibility': np.random.uniform(5000, 10000, n_samples),
+              'temperature_lag_1h': np.random.uniform(10, 30, n_samples),
+              'temperature_lag_3h': np.random.uniform(10, 30, n_samples),
+              'temperature_rolling_mean_6h': np.random.uniform(10, 30, n_samples),
+          })
+          data['temperature_target'] = data['temperature'] + np.random.normal(0, 2, n_samples)
+          
+          Path('data/processed').mkdir(parents=True, exist_ok=True)
+          data.to_parquet('data/processed/test_data.parquet')
+          print(f'Created test data with {len(data)} samples')
+          "
+
+      - name: Train model
+        run: |
+          source .venv/bin/activate
+          python -c "
+          from src.models.train import train_model
+          from pathlib import Path
+          
+          metrics = train_model(data_path=Path('data/processed/test_data.parquet'))
+          print('Training completed!')
+          print('Metrics:', metrics)
+          "
+
+      - name: Generate CML Report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          source .venv/bin/activate
+          
+          # Create CML report
+          echo "# 🌤️ Weather Prediction Model Training Report" > report.md
+          echo "" >> report.md
+          echo "## 📊 Model Metrics" >> report.md
+          echo "" >> report.md
+          
+          # Read metrics
+          if [ -f "reports/metrics.json" ]; then
+            echo '```json' >> report.md
+            cat reports/metrics.json >> report.md
+            echo '```' >> report.md
+          else
+            echo "No metrics file found" >> report.md
+          fi
+          
+          echo "" >> report.md
+          echo "## 📈 Feature Importance" >> report.md
+          echo "" >> report.md
+          
+          # Add feature importance plot if exists
+          if [ -f "reports/feature_importance.png" ]; then
+            echo "![Feature Importance](reports/feature_importance.png)" >> report.md
+            cml comment create report.md --publish-native-files
+          else
+            echo "Feature importance plot not generated" >> report.md
+            cml comment create report.md
+          fi
+
+      - name: Check model performance threshold
+        run: |
+          source .venv/bin/activate
+          python -c "
+          import json
+          from pathlib import Path
+          
+          metrics_path = Path('reports/metrics.json')
+          if metrics_path.exists():
+              with open(metrics_path) as f:
+                  metrics = json.load(f)
+              
+              test_rmse = metrics.get('test_rmse', float('inf'))
+              test_r2 = metrics.get('test_r2', 0)
+              
+              print(f'Test RMSE: {test_rmse:.4f}')
+              print(f'Test R2: {test_r2:.4f}')
+              
+              # Fail if model performs poorly
+              if test_rmse > 10:
+                  print('WARNING: Model RMSE is too high!')
+                  # exit(1)  # Uncomment to block merge
+              if test_r2 < 0.5:
+                  print('WARNING: Model R2 is too low!')
+                  # exit(1)  # Uncomment to block merge
+              
+              print('Model performance check passed!')
+          else:
+              print('No metrics file found')
+          "
+

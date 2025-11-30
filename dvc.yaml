@@ -1,0 +1,50 @@
+stages:
+  extract:
+    cmd: python -m src.data.extract
+    deps:
+      - src/data/extract.py
+      - src/config.py
+    outs:
+      - data/raw:
+          persist: true
+
+  validate:
+    cmd: python -c "from src.data.quality_checks import validate_weather_data; from src.data.extract import WeatherDataExtractor; e = WeatherDataExtractor(); df = e.load_historical_data(); validate_weather_data(df)"
+    deps:
+      - src/data/quality_checks.py
+      - data/raw
+    metrics:
+      - reports/quality_metrics.json:
+          cache: false
+
+  transform:
+    cmd: python -m src.data.transform
+    deps:
+      - src/data/transform.py
+      - data/raw
+    outs:
+      - data/processed:
+          persist: true
+    plots:
+      - reports/data_profile.html:
+          cache: false
+
+  train:
+    cmd: python -m src.models.train
+    deps:
+      - src/models/train.py
+      - data/processed
+    params:
+      - train.n_estimators
+      - train.max_depth
+      - train.learning_rate
+    outs:
+      - models/model.joblib:
+          persist: true
+    metrics:
+      - reports/metrics.json:
+          cache: false
+    plots:
+      - reports/feature_importance.png:
+          cache: false
+
